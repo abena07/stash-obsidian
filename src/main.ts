@@ -1,14 +1,14 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, normalizePath, requestUrl } from "obsidian";
 import { Action, RemoteFile, State, nextState, plan, summary } from "./sync.ts";
 import * as roundup from "./roundup.ts";
+import { Connection, fromSaved, label, newFolder, readFolders, sharedFolders } from "./connections.ts";
 
 // the public stash bot. people who self-host change this in settings.
 const DEFAULT_SERVER = "https://api.stash.bennett-eghan.com";
 
 interface Settings {
   server: string;
-  code: string;
-  folder: string;
+  connections: Connection[]; // one per discord server, each with its own code and folder
   which: "read" | "loved" | "all";
   intervalMinutes: number;
   roundupFolder: string;
@@ -18,8 +18,7 @@ interface Settings {
 
 const DEFAULTS: Settings = {
   server: DEFAULT_SERVER,
-  code: "",
-  folder: "stash",
+  connections: [{ name: "", code: "", folder: "stash" }],
   which: "read",
   intervalMinutes: 30,
   roundupFolder: "roundups",
@@ -40,7 +39,9 @@ export default class StashPlugin extends Plugin {
 
   async onload() {
     const saved = ((await this.loadData()) ?? {}) as Partial<Saved>;
-    this.settings = { ...DEFAULTS, ...(saved.settings ?? {}) };
+    const old = (saved.settings ?? {}) as Partial<Settings> & { code?: string; folder?: string };
+    const { code: _code, folder: _folder, ...rest } = old;
+    this.settings = { ...DEFAULTS, ...rest, connections: fromSaved(old) };
     this.state = saved.state ?? {};
 
     this.addCommand({ id: "sync-now", name: "Sync now", callback: () => this.sync(true) });
@@ -70,27 +71,40 @@ export default class StashPlugin extends Plugin {
 
   async sync(loud: boolean) {
     if (this.syncing) return;
-    if (!this.settings.code) {
+    const connections = this.settings.connections
+      .map((c, i) => ({ c, name: label(c, i) }))
+      .filter(({ c }) => c.code);
+    if (connections.length === 0) {
       if (loud) new Notice("stash: add your code in settings first. get one with /connect obsidian in discord.");
       return;
     }
     this.syncing = true;
+    const vault = this.app.vault;
+    const read = async (path: string) => {
+      const file = vault.getAbstractFileByPath(normalizePath(path));
+      return file instanceof TFile ? await vault.read(file) : null;
+    };
+    const all: Action[] = [];
+    const failures: string[] = [];
     try {
-      const files = await this.fetchFiles();
-      const vault = this.app.vault;
-      const read = async (path: string) => {
-        const file = vault.getAbstractFileByPath(normalizePath(path));
-        return file instanceof TFile ? await vault.read(file) : null;
-      };
-      const actions = await plan(files, this.state, this.settings.folder, read);
-      await this.apply(actions);
-      this.state = nextState(this.state, actions);
+      // one at a time, so a failing server doesn't stop the others
+      for (const { c, name } of connections) {
+        try {
+          const files = await this.fetchFiles(c.code);
+          const actions = await plan(files, this.state, c.folder, read);
+          await this.apply(actions, c.folder);
+          this.state = nextState(this.state, actions);
+          all.push(...actions);
+        } catch (err) {
+          console.error(`stash sync failed for ${name}`, err);
+          failures.push(connections.length > 1 ? `${name}: ${message(err)}` : message(err));
+        }
+      }
       await this.persist();
-      const changed = actions.some((a) => !["unchanged"].includes(a.kind));
-      if (loud || changed) new Notice(summary(actions), 8000);
-    } catch (err) {
-      console.error("stash sync failed", err);
-      if (loud) new Notice(`stash: ${err instanceof Error ? err.message : "sync failed"}`, 8000);
+      const changed = all.some((a) => a.kind !== "unchanged");
+      const anySynced = failures.length < connections.length;
+      if (anySynced && (loud || changed)) new Notice(summary(all), 8000);
+      if (loud && failures.length) new Notice(`stash: ${failures.join(" ")}`, 8000);
     } finally {
       this.syncing = false;
     }
@@ -98,10 +112,12 @@ export default class StashPlugin extends Plugin {
 
   async makeRoundup(month: string) {
     const vault = this.app.vault;
-    const folder = normalizePath(this.settings.folder);
-    const files = vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${folder}/`));
-    const entries = (await Promise.all(files.map(async (f) => roundup.parseStashFile(await vault.read(f)))))
+    const folders = readFolders(this.settings.connections).map((f) => normalizePath(f));
+    const files = vault.getMarkdownFiles().filter((f) => folders.some((folder) => f.path.startsWith(`${folder}/`)));
+    const parsed = (await Promise.all(files.map(async (f) => roundup.parseStashFile(await vault.read(f)))))
       .filter((e): e is roundup.Entry => e !== null);
+    // the same link saved in two servers counts once
+    const entries = [...new Map(parsed.map((e) => [e.url, e])).values()];
     const picked = roundup.pick(entries, month, this.settings.roundupCount);
     if (picked.length === 0) {
       new Notice(`stash: nothing loved in ${roundup.monthName(month)} yet. react 👍 on links in discord, then sync.`, 8000);
@@ -124,11 +140,11 @@ export default class StashPlugin extends Plugin {
     new Notice(`stash: made your ${roundup.monthName(month)} roundup with ${picked.length} link${picked.length === 1 ? "" : "s"}.`, 8000);
   }
 
-  private async fetchFiles(): Promise<RemoteFile[]> {
+  private async fetchFiles(code: string): Promise<RemoteFile[]> {
     const base = this.settings.server.replace(/\/+$/, "");
     const response = await requestUrl({
       url: `${base}/api/v1/links?which=${encodeURIComponent(this.settings.which)}`,
-      headers: { Authorization: `Bearer ${this.settings.code.trim()}` },
+      headers: { Authorization: `Bearer ${code.trim()}` },
       throw: false,
     });
     if (response.status === 401) throw new Error("that code doesn't work. get a new one with /connect obsidian.");
@@ -137,9 +153,9 @@ export default class StashPlugin extends Plugin {
     return (response.json as { files: RemoteFile[] }).files;
   }
 
-  private async apply(actions: Action[]) {
+  private async apply(actions: Action[], into: string) {
     const vault = this.app.vault;
-    const folder = normalizePath(this.settings.folder);
+    const folder = normalizePath(into);
     if (folder && folder !== "/" && !vault.getAbstractFileByPath(folder)) {
       await vault.createFolder(folder);
     }
@@ -161,6 +177,10 @@ export default class StashPlugin extends Plugin {
   }
 }
 
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : "sync failed";
+}
+
 class StashSettings extends PluginSettingTab {
   constructor(app: App, private plugin: StashPlugin) {
     super(app, plugin);
@@ -176,24 +196,65 @@ class StashSettings extends PluginSettingTab {
         + "files you edit are never overwritten.",
     });
 
-    new Setting(containerEl)
-      .setName("Code")
-      .setDesc("run /connect obsidian in discord and paste the code here. it works like a password.")
-      .addText((t) => {
-        t.inputEl.type = "password";
-        t.setPlaceholder("stash_…").setValue(s.code).onChange(async (v) => {
-          s.code = v.trim();
-          await this.plugin.persist();
+    const several = s.connections.length > 1;
+    s.connections.forEach((c, i) => {
+      if (several) new Setting(containerEl).setName(label(c, i)).setHeading();
+
+      if (several) {
+        new Setting(containerEl)
+          .setName("Name")
+          .setDesc("just for you, e.g. \"personal\" or \"friends\".")
+          .addText((t) => t.setValue(c.name).onChange(async (v) => {
+            c.name = v.trim();
+            await this.plugin.persist();
+          }))
+          .addExtraButton((b) => b.setIcon("trash").setTooltip("remove this server").onClick(async () => {
+            s.connections.splice(i, 1);
+            await this.plugin.persist();
+            this.display();
+          }));
+      }
+
+      new Setting(containerEl)
+        .setName("Code")
+        .setDesc("run /connect obsidian in discord, in the server you want, and paste the code here. "
+          + "it works like a password.")
+        .addText((t) => {
+          t.inputEl.type = "password";
+          t.setPlaceholder("stash_…").setValue(c.code).onChange(async (v) => {
+            c.code = v.trim();
+            await this.plugin.persist();
+          });
         });
+
+      new Setting(containerEl)
+        .setName("Folder")
+        .setDesc("where this server's files go in your vault.")
+        .addText((t) => t.setValue(c.folder).onChange(async (v) => {
+          c.folder = v.trim() || "stash";
+          await this.plugin.persist();
+        }));
+    });
+
+    const clash = sharedFolders(s.connections);
+    if (clash.length) {
+      containerEl.createEl("p", {
+        text: `two servers use the same folder (${clash.join(", ")}). give each its own folder so their files don't mix.`,
       });
+    }
 
     new Setting(containerEl)
-      .setName("Folder")
-      .setDesc("where the files go in your vault.")
-      .addText((t) => t.setValue(s.folder).onChange(async (v) => {
-        s.folder = v.trim() || "stash";
+      .setName("Another server")
+      .setDesc("in more than one discord server with stash? add each one, with its own code and folder.")
+      .addButton((b) => b.setButtonText("Add server").onClick(async () => {
+        if (s.connections.length === 1 && !s.connections[0].name) s.connections[0].name = "personal";
+        const name = `server ${s.connections.length + 1}`;
+        s.connections.push({ name, code: "", folder: newFolder(s.connections, name) });
         await this.plugin.persist();
+        this.display();
       }));
+
+    new Setting(containerEl).setName("Sync").setHeading();
 
     new Setting(containerEl)
       .setName("Which links")

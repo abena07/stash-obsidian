@@ -14,6 +14,9 @@ stash isn't in obsidian's plugin store yet. until then, install it with brat:
 2. open **settings → stash** and paste the code.
 3. that's it. it syncs when obsidian opens, every 30 minutes while it's open, and whenever you run **stash: sync now**.
 
+## more than one server
+in your own server and a group server too? in **settings → stash**, press **add server**, run `/connect obsidian` in the other server and paste that code. each server syncs into its own folder (e.g. `stash` and `stash-friends`), and the monthly roundup reads them all.
+
 ## what it does
 - one markdown file per link in `stash/` (you can change the folder), with frontmatter (url, title, saved and read dates, loved, tags) and your notes from the link's discord thread.
 - by default only links you've marked ✅ read. you can pick loved or all.
@@ -34,5 +37,3 @@ npm test        # the sync rules
 npm run build   # main.js
 ```
 copy `main.js` and `manifest.json` into `<your vault>/.obsidian/plugins/stash-sync/` to try it.
-
-> this repo is a mirror of [`obsidian/`](https://github.com/abena07/stash/tree/main/obsidian) in [abena07/stash](https://github.com/abena07/stash). please open issues and pull requests there.

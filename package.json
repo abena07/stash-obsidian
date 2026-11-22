@@ -1,6 +1,6 @@
 {
   "name": "stash-obsidian",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "obsidian plugin for stash: syncs saved links and notes into a vault folder",
   "main": "main.js",
