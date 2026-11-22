@@ -1,0 +1,20 @@
+{
+  "name": "stash-obsidian",
+  "version": "0.1.0",
+  "private": true,
+  "description": "obsidian plugin for stash: syncs saved links and notes into a vault folder",
+  "main": "main.js",
+  "scripts": {
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "builtin-modules": "5.5.0",
+    "esbuild": "0.28.2",
+    "obsidian": "1.14.4",
+    "typescript": "7.0.2"
+  }
+}

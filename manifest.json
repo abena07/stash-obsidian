@@ -1,0 +1,10 @@
+{
+  "id": "stash-sync",
+  "name": "Stash",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Sync the links and notes you save with the stash Discord bot into a folder in your vault.",
+  "author": "abena07",
+  "authorUrl": "https://stash.bennett-eghan.com",
+  "isDesktopOnly": false
+}
