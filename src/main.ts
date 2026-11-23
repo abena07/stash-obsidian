@@ -1,7 +1,7 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, normalizePath, requestUrl } from "obsidian";
 import { Action, RemoteFile, State, nextState, plan, summary } from "./sync.ts";
 import * as roundup from "./roundup.ts";
-import { Connection, fromSaved, label, newFolder, readFolders, sharedFolders } from "./connections.ts";
+import { Connection, folderAfterRename, fromSaved, label, newFolder, readFolders, sharedFolders } from "./connections.ts";
 
 // the public stash bot. people who self-host change this in settings.
 const DEFAULT_SERVER = "https://api.stash.bennett-eghan.com";
@@ -204,10 +204,23 @@ class StashSettings extends PluginSettingTab {
         new Setting(containerEl)
           .setName("Name")
           .setDesc("just for you, e.g. \"personal\" or \"friends\".")
-          .addText((t) => t.setValue(c.name).onChange(async (v) => {
-            c.name = v.trim();
-            await this.plugin.persist();
-          }))
+          .addText((t) => {
+            t.setValue(c.name).onChange(async (v) => {
+              c.name = v.trim();
+              await this.plugin.persist();
+            });
+            // the folder follows the name once you're done typing (not on every key)
+            let before = c.name;
+            t.inputEl.addEventListener("change", async () => {
+              const folder = folderAfterRename(c.folder, before, c.name, s.connections.filter((o) => o !== c));
+              before = c.name;
+              if (folder === c.folder) return;
+              c.folder = folder;
+              await this.plugin.persist();
+              this.display();
+              void this.plugin.sync(false); // moves the files already synced into the new folder
+            });
+          })
           .addExtraButton((b) => b.setIcon("trash").setTooltip("remove this server").onClick(async () => {
             s.connections.splice(i, 1);
             await this.plugin.persist();

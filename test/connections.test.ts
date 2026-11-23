@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fromSaved, label, newFolder, readFolders, sharedFolders, type Connection } from "../src/connections.ts";
+import { folderAfterRename, fromSaved, label, newFolder, readFolders, sharedFolders, type Connection } from "../src/connections.ts";
 
 const conn = (name: string, folder: string, code = "stash_x"): Connection => ({ name, code, folder });
 
@@ -26,6 +26,19 @@ test("a new connection gets its own folder", () => {
   assert.equal(newFolder([conn("personal", "stash")], "Friends & Co"), "stash-friends-co");
   assert.equal(newFolder([conn("a", "stash"), conn("b", "stash-friends")], "friends"), "stash-friends-2");
   assert.equal(newFolder([], "!!!"), "stash-server");
+});
+
+test("renaming a connection moves its folder only if the folder came from the old name", () => {
+  const others = [conn("personal", "stash")];
+  assert.equal(folderAfterRename("stash-server-2", "server 2", "vining", others), "stash-vining");
+  assert.equal(folderAfterRename("my-links", "server 2", "vining", others), "my-links");
+  assert.equal(folderAfterRename("stash-server-2", "server 2", "  ", others), "stash-server-2");
+  assert.equal(folderAfterRename("stash-server-2", "server 2", "server 2", others), "stash-server-2");
+  // the personal folder isn't made from its name, so it never moves
+  assert.equal(folderAfterRename("stash", "", "personal", [conn("friends", "stash-friends")]), "stash");
+  // a new folder name another connection already uses gets a number
+  assert.equal(folderAfterRename("stash-server-2", "server 2", "friends", [conn("a", "stash"), conn("b", "stash-friends")]),
+    "stash-friends-2");
 });
 
 test("connections without a name get one in messages", () => {

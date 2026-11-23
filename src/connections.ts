@@ -38,6 +38,14 @@ export function newFolder(existing: Connection[], name: string): string {
   return folder;
 }
 
+// the folder after a connection is renamed. a folder still made from the old name (e.g.
+// "stash-server-2") follows the new one ("stash-friends"); a folder you picked yourself stays.
+export function folderAfterRename(folder: string, oldName: string, newName: string, others: Connection[]): string {
+  if (!newName.trim() || newName.trim() === oldName.trim()) return folder;
+  if (folder !== newFolder(others, oldName)) return folder;
+  return newFolder(others, newName);
+}
+
 // how a connection is named in messages
 export function label(c: Connection, index: number): string {
   return c.name || (index === 0 ? "your stash" : `server ${index + 1}`);
